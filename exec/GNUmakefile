@@ -1,4 +1,5 @@
 VARS_OLD := $(.VARIABLES)
+.DELETE_ON_ERROR:
 # Keep installation-specific settings outside the tracked build rules.
 # Run from exec/ (or use make -C exec). Relative paths are based there.
 CONFIG ?= config.mk
@@ -131,21 +132,24 @@ check-config:
 		{ echo "Set HDF5_INC and HDF5_LIB (or OLCF_HDF5_ROOT) for parallel HDF5 in $(CONFIG)."; exit 1; }
 	@test -n "$(strip $(LAPACK_INC))" -a -n "$(strip $(LAPACK_LIB))" || \
 		{ echo "Set LAPACK_INC and LAPACK_LIB to OpenBLAS directories in $(CONFIG)."; exit 1; }
+	@for dir in "$(if $(HDF5_INC),$(HDF5_INC),$(OLCF_HDF5_ROOT)/include)" \
+		"$(if $(HDF5_LIB),$(HDF5_LIB),$(OLCF_HDF5_ROOT)/lib)" "$(LAPACK_INC)" "$(LAPACK_LIB)"; do \
+		test -d "$$dir" || { echo "Dependency directory does not exist: $$dir. Edit $(CONFIG)."; exit 1; }; \
+	done
+	@$(CXX) --version >/dev/null || \
+		{ echo "CXX=$(CXX) is unavailable. Select a working MPI compiler wrapper in $(CONFIG) (and load its compiler/MPI modules)."; exit 1; }
 
 $(OBJDIR):
-	@if [ ! -d "./$(OBJDIR)" ];then     \
-		mkdir $(OBJDIR);           \
-	fi
+	@mkdir -p $@
 
 $(DEPDIR):
-	@if [ ! -d "./$(DEPDIR)" ];then     \
-		mkdir $(DEPDIR);           \
-	fi
+	@mkdir -p $@
 
 #compile non-main sources
-$(OBJDIR)/%.o : %.cpp   $(OBJDIR) $(DEPDIR)
+$(OBJDIR)/%.o : %.cpp | $(OBJDIR) $(DEPDIR)
 	$(CXX) -c -o $@ $< $(CXXFLAGS) $(CPPFLAGS)
-	$(DEP) $< $(CPPFLAGS) -MT $@ > $(DEPDIR)/$*.d
+	$(DEP) $< $(CPPFLAGS) -MT $@ > $(DEPDIR)/$*.d.tmp
+	mv $(DEPDIR)/$*.d.tmp $(DEPDIR)/$*.d
 
 
 

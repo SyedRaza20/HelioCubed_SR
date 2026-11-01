@@ -52,6 +52,7 @@ for your installation:
 ```sh
 cp config.mk.example config.mk
 # Edit config.mk, then build:
+make check-config
 make -j8
 ```
 
@@ -70,6 +71,20 @@ environment variables or command-line assignments. Command-line assignments
 take precedence over the configuration file. Missing configuration is reported
 before compilation; `make check-config` checks the Proto layout and required
 dependency settings without compiling.
+
+If the compiler reports an Intel license checkout failure, the selected
+`mpicxx` wraps an Intel compiler that cannot obtain a license. Load a working
+compiler/MPI module pair and set `CXX` in `config.mk` to that stack's MPI wrapper.
+Select parallel HDF5 built with that same MPI stack, and replace every
+`/path/to/...` entry in the template with an existing installation directory.
+`make check-config` checks directory existence and whether the compiler can
+report its version; it does not verify library ABI compatibility.
+
+`-j8` permits up to eight independent build jobs. The current solver compiles
+as a single translation unit (`main.cpp`, which includes the solver headers),
+so reducing the job count will not reduce its individual compiler memory use.
+If compilation is killed for lack of memory, use a build allocation with more
+memory or set `CXXOPTFLAGS = -O1` in `config.mk` and rebuild with `make -B`.
 
 The executable is `exec/cubedSphereTest.exe`. The shared makefile enables
 `PR_AMR`; select uniform-grid or adaptive operation at runtime with
