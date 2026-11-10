@@ -1,17 +1,32 @@
-# Copy to config.mk and edit for your installation. config*.mk is ignored by Git.
-# Run make from exec/; all relative paths are interpreted from that directory.
-# Use an MPI compiler wrapper and parallel HDF5 built with the same MPI stack.
-CXX = mpicxx
+# Anvil GCC/OpenMPI configuration; no module commands are needed to build.
+# From exec/: cp config.mk.example config.mk && make -j8
+# Other machines: replace these installation paths. config.mk is ignored by Git.
+ANVIL_GCC = /apps/spack/anvil/apps/gcc/11.2.0-gcc-8.4.1-qjtdkvs
+ANVIL_MPI = /apps/spack/anvil/apps/openmpi/4.1.6-gcc-11.2.0-745pfv4
+CXX = $(ANVIL_MPI)/bin/mpicxx
 DEPXX = $(CXX)
+MPIEXEC = $(ANVIL_MPI)/bin/mpiexec
+
+# Pin the compiler even if the shell has an OMPI_CXX override or Intel modules.
+export OMPI_CXX = $(ANVIL_GCC)/bin/g++
+unexport CPATH C_INCLUDE_PATH CPLUS_INCLUDE_PATH LIBRARY_PATH
 
 # Proto checkout beside HelioCubed; change this if installed elsewhere.
 PROTO = ../../proto
 
 # These variables are directory paths, not compiler or linker flags.
-HDF5_INC = /path/to/parallel-hdf5/include
-HDF5_LIB = /path/to/parallel-hdf5/lib
-LAPACK_INC = /path/to/openblas/include
-LAPACK_LIB = /path/to/openblas/lib
+HDF5_INC = /apps/spack/anvil/apps/hdf5/1.10.7-gcc-11.2.0-ssjeoyy/include
+HDF5_LIB = /apps/spack/anvil/apps/hdf5/1.10.7-gcc-11.2.0-ssjeoyy/lib
+LAPACK_INC = /apps/spack/anvil/apps/openblas/0.3.17-gcc-11.2.0-ddiendx/include
+LAPACK_LIB = /apps/spack/anvil/apps/openblas/0.3.17-gcc-11.2.0-ddiendx/lib
+
+# Supply matching libraries to build commands without changing the parent shell.
+ANVIL_RUNTIME_LIBS = $(HDF5_LIB):$(LAPACK_LIB):$(ANVIL_MPI)/lib:$(ANVIL_GCC)/lib64
+export LD_LIBRARY_PATH := $(ANVIL_RUNTIME_LIBS)$(if $(LD_LIBRARY_PATH),:$(LD_LIBRARY_PATH))
+
+# Embed runtime paths in the executable. DT_RPATH also takes precedence over
+# conflicting Intel/MVAPICH libraries in an inherited LD_LIBRARY_PATH.
+LIBS += -Wl,--disable-new-dtags,-rpath,$(ANVIL_RUNTIME_LIBS)
 
 # Optional compiler settings (default: c++17).
 # CXXSTD = c++17

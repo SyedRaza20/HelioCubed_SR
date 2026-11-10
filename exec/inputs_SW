@@ -222,6 +222,8 @@
 # Trajectory-probe sampling interval (s).
 -Probe_cadence                  3600
 # Trajectory file: year, day-of-year, radius (AU), HGI latitude/longitude (deg).
+# Packed alternative: set coords to trajectories.h5 and filename to probe_samples.h5.
+# One entry samples every packed trajectory; input and output must differ.
 -probe0.coords                  trajEarth
 -probe0.filename                Earth.dat
 #-probe1.coords                  traj_0

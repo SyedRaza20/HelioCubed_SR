@@ -592,7 +592,7 @@ public:
 
 private:
     template<bool DivB> void writePlot(HDF5Handler&,const std::string&,double);
-    std::pair<int,std::array<double,NUMCOMPS>> samplePreparedProbe(const Array<double,DIM>&);
+    std::pair<int,std::array<double,NUMCOMPS>> samplePreparedProbe(const Array<double,DIM>&,bool localOnly=false);
     void restrictTo(unsigned l,const Level& source,Level& destination)
     {
         PR_TIMERS("HelioCubed::AMR::restrict");

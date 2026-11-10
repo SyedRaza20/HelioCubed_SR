@@ -130,6 +130,7 @@ inline void runCubedSphereAMR()
         const int study=split ? selected : run;
         const Point sizes=domain*studyScale;
         const std::string suffix=convergence ? "_conv_"+std::to_string(study) : "";
+        validateProbeFiles(ParseInputs::get_probe_coords(),ParseInputs::get_probe_filenames(),suffix);
         CubedSphereAMR simulation(CubedSphereShell::Domain(sizes[1],sizes[0],0),box,
             ParseInputs::get_restart_file(),studyScale,suffix);
         double time=simulation.restartTime,dt=simulation.restartDt;

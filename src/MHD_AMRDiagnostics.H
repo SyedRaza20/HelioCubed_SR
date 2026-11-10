@@ -59,7 +59,7 @@ inline void CubedSphereAMR::writePlot(HDF5Handler& h5,const std::string& prefix,
 }
 
 inline std::pair<int,std::array<double,NUMCOMPS>> CubedSphereAMR::samplePreparedProbe(
-    const Array<double,DIM>& position)
+    const Array<double,DIM>& position,bool localOnly)
 {
     PR_TIMERS("HelioCubed::AMR::sampleProbe");
     std::array<double,NUMCOMPS> values{};
@@ -105,9 +105,10 @@ inline std::pair<int,std::array<double,NUMCOMPS>> CubedSphereAMR::samplePrepared
                 values[iBX]+=testProblemBackgroundBx(ParseInputs::get_init_condition_type());
             }
 #ifdef PR_MPI
-            MPI_Bcast(values.data(),NUMCOMPS,MPI_DOUBLE,owner,MPI_COMM_WORLD);
+            if(!localOnly) MPI_Bcast(values.data(),NUMCOMPS,MPI_DOUBLE,owner,MPI_COMM_WORLD);
 #endif
-            for(double value : values) if(!std::isfinite(value))
+            if(localOnly && owner!=procID()) return {-1,values};
+            for(double value : values) if(!localOnly && !std::isfinite(value))
                 throw std::runtime_error("Nonfinite AMR probe sample");
             return {l,values};
         }
@@ -122,43 +123,57 @@ inline void CubedSphereAMR::writeProbes(int iteration,double time,bool giveSpace
     prepareStates(time);
     for(int p=0;p<ParseInputs::get_num_probes();++p)
     {
-        const auto& trajectory=probeTrajectory(ParseInputs::get_probe_coords()[p]);
-        const double epoch=getPhysTime(time);
-        const double radius=interpolate(trajectory.time,trajectory.radius,epoch,false)*c_AU;
-        const double latitude=interpolate(trajectory.time,trajectory.latitude,epoch,false);
-        const double longitude=std::fmod(interpolate(trajectory.time,trajectory.longitude,epoch,false)+181.02+360,360);
-        const double theta=(90-latitude)*M_PI/180,phi=longitude*M_PI/180;
-        const Array<double,DIM> normal={sin(theta)*cos(phi),sin(theta)*sin(phi),cos(theta)};
-        const Array<double,DIM> position={radius*normal[0],radius*normal[1],radius*normal[2]};
-        const auto sample=samplePreparedProbe(position);
-        if(sample.first<0)
+        const auto& input=ParseInputs::get_probe_coords()[p];
+        PackedProbeSet* packed=packedProbeFile(input) ? &packedProbeSet(input) : nullptr;
+        if(packed) packed->begin();
+        const size_t count=packed ? packed->size() : 1;
+        for(size_t probe=0;probe<count;++probe)
         {
-            pout(0)<<"AMR probe "<<p<<" is outside the shell at iteration "<<iteration<<std::endl;
-            continue;
-        }
-        const auto& w=sample.second;
-        auto project=[&](int start,double scale)
-        {
-            const double x=w[start]*scale,y=w[start+1]*scale,z=w[start+2]*scale;
-            return projectProbeVectorToRTN(x,y,z,theta,phi);
-        };
-        const auto velocity=project(iVX,1e-5),magnetic=project(iBX,1e6);
-        int error=0;
-        if(procID()==0)
-        {
-            std::ofstream file(ParseInputs::get_probe_filenames()[p]+m_outputSuffix,std::ios::app);
-            if(giveSpace) file<<'\n';
-            file<<std::setw(16)<<std::setprecision(12)<<epoch<<std::setprecision(4);
-            for(double value : {radius/c_AU,latitude,longitude,w[iRHO]/c_MP,
-                velocity[0],velocity[1],velocity[2],w[iP]*1e12,magnetic[0],magnetic[1],magnetic[2]})
-                file<<std::setw(11)<<value;
-            file<<'\n';file.close();error=!file;
-        }
+            const auto& trajectory=packed ? packed->trajectory(probe) : probeTrajectory(input);
+            const double epoch=getPhysTime(time);
+            const double radius=interpolate(trajectory.time,trajectory.radius,epoch,false)*c_AU;
+            const double latitude=interpolate(trajectory.time,trajectory.latitude,epoch,false);
+            const double longitude=std::fmod(std::fmod(interpolate(trajectory.time,trajectory.longitude,epoch,false)+181.02,360)+360,360);
+            const double theta=(90-latitude)*M_PI/180,phi=longitude*M_PI/180;
+            const Array<double,DIM> normal={sin(theta)*cos(phi),sin(theta)*sin(phi),cos(theta)};
+            const Array<double,DIM> position={radius*normal[0],radius*normal[1],radius*normal[2]};
+            const auto sample=samplePreparedProbe(position,packed!=nullptr);
+            if(sample.first<0)
+            {
+                if(!packed) pout(0)<<"AMR probe "<<p<<" is outside the shell at iteration "<<iteration<<std::endl;
+                continue;
+            }
+            const auto& w=sample.second;
+            auto project=[&](int start,double scale)
+            {
+                const double x=w[start]*scale,y=w[start+1]*scale,z=w[start+2]*scale;
+                return projectProbeVectorToRTN(x,y,z,theta,phi);
+            };
+            const auto velocity=project(iVX,1e-5),magnetic=project(iBX,1e6);
+            if(packed)
+            {
+                packed->record(probe,{radius/c_AU,latitude,longitude,w[iRHO]/c_MP,
+                    velocity[0],velocity[1],velocity[2],w[iP]*1e12,magnetic[0],magnetic[1],magnetic[2]});
+                continue;
+            }
+            int error=0;
+            if(procID()==0)
+            {
+                std::ofstream file(ParseInputs::get_probe_filenames()[p]+m_outputSuffix,std::ios::app);
+                if(giveSpace) file<<'\n';
+                file<<std::setw(16)<<std::setprecision(12)<<epoch<<std::setprecision(4);
+                for(double value : {radius/c_AU,latitude,longitude,w[iRHO]/c_MP,
+                    velocity[0],velocity[1],velocity[2],w[iP]*1e12,magnetic[0],magnetic[1],magnetic[2]})
+                    file<<std::setw(11)<<value;
+                file<<'\n';file.close();error=!file;
+            }
 #ifdef PR_MPI
-        MPI_Bcast(&error,1,MPI_INT,0,MPI_COMM_WORLD);
+            MPI_Bcast(&error,1,MPI_INT,0,MPI_COMM_WORLD);
 #endif
-        if(error) throw std::runtime_error("Could not write AMR probe output");
-        pout(0)<<"AMR probe "<<p<<" level = "<<sample.first<<" at iteration "<<iteration<<std::endl;
+            if(error) throw std::runtime_error("Could not write AMR probe output");
+            pout(0)<<"AMR probe "<<p<<" level = "<<sample.first<<" at iteration "<<iteration<<std::endl;
+        }
+        if(packed) packed->finish(ParseInputs::get_probe_filenames()[p]+m_outputSuffix,getPhysTime(time));
     }
 }
 }

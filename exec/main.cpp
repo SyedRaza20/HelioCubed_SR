@@ -26,6 +26,8 @@ int main(int argc, char *argv[])
   try
   {
     ParseInputs::getInstance().parsenow(argc, argv);
+    if(!ParseInputs::get_amr_max_level())
+      HelioCubed::validateProbeFiles(ParseInputs::get_probe_coords(),ParseInputs::get_probe_filenames());
   }
   catch (const std::exception& error)
   {
@@ -473,11 +475,22 @@ int main(int argc, char *argv[])
       int probe_trigger_count_now = floor(time/probe_cadence);
       bool do_probes = (time > probe_trigger_count_now * probe_cadence - dt) && (time < probe_trigger_count_now * probe_cadence + dt) && (probe_trigger_count_now != probe_trigger_count_temp);
       if (do_probes || iter == 1 || time_exceeded){
-        for (int p = 0; p < num_probes; ++p) {
-          string probe_coord = probe_coords[static_cast<size_t>(p)];
-          string probe_filename = probe_filenames[static_cast<size_t>(p)];
-          Probe(JU, map, eulerOp, iop, iter, time, dx, give_space_in_probe_file,
-                probe_coord, probe_filename, &dVolrLev);
+        try
+        {
+          for (int p = 0; p < num_probes; ++p) {
+            string probe_coord = probe_coords[static_cast<size_t>(p)];
+            string probe_filename = probe_filenames[static_cast<size_t>(p)];
+            Probe(JU, map, eulerOp, iop, iter, time, dx, give_space_in_probe_file,
+                  probe_coord, probe_filename, &dVolrLev);
+          }
+        }
+        catch(const std::exception& error)
+        {
+          pout(0) << "Error: " << error.what() << endl;
+#ifdef PR_MPI
+          MPI_Abort(MPI_COMM_WORLD,1);
+#endif
+          return 1;
         }
         give_space_in_probe_file = false;
         probe_trigger_count_temp = probe_trigger_count_now;

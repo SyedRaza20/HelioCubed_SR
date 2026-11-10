@@ -6,6 +6,7 @@
 #include "MHD_Constants.H"
 #include "MHD_Output.H"
 #include "MHD_Probe.H"
+#include "MHD_PackedProbes.H"
 #include <iomanip>
 #include <iostream>
 #include <string.h>
@@ -1469,6 +1470,7 @@ inline void ReadCheckpointState(HDF5Handler& a_h5,
 double interpolate(const vector<double> &xData, const vector<double> &yData, double x, bool extrapolate)
 {
   int size = xData.size();
+  if (size == 1) return yData.front();
 
   int i = 0;                // find left end of interval for interpolation
   if (x >= xData[size - 2]) // special case: beyond right end
@@ -1496,48 +1498,6 @@ double interpolate(const vector<double> &xData, const vector<double> &yData, dou
 
 namespace HelioCubed
 {
-struct ProbeTrajectory
-{
-  vector<double> time, radius, latitude, longitude;
-
-  explicit ProbeTrajectory(const string& filename)
-  {
-    std::ifstream file(filename);
-    if (!file.is_open()) MayDay<void>::Abort(("Unable to open probe trajectory: " + filename).c_str());
-    string line;
-    while (std::getline(file, line))
-    {
-      if (line.find_first_not_of(" \t\r\n") == string::npos) continue;
-      double yearValue, dayValue, r, lat, lon;
-      std::istringstream row(line);
-      if (!(row >> yearValue >> dayValue >> r >> lat >> lon))
-        MayDay<void>::Abort(("Invalid probe trajectory row in: " + filename).c_str());
-      // Retain the existing whole-day interpretation of trajectory DOY values.
-      const int year = static_cast<int>(yearValue);
-      const int day = static_cast<int>(dayValue);
-      const double epoch = year + (day - 1)/(gregorianLeapYear(year) ? 366.0 : 365.0);
-      if (!time.empty() && epoch <= time.back())
-        MayDay<void>::Abort(("Probe trajectory times must increase: " + filename).c_str());
-      time.push_back(epoch);
-      radius.push_back(r);
-      latitude.push_back(lat);
-      longitude.push_back(lon);
-    }
-    if (time.size() < 2)
-      MayDay<void>::Abort(("Probe trajectory needs at least two rows: " + filename).c_str());
-  }
-};
-
-inline const ProbeTrajectory& probeTrajectory(const string& filename)
-{
-  // Trajectories are run inputs; load each distinct file once on each rank.
-  static std::map<string, ProbeTrajectory> cache;
-  auto entry = cache.find(filename);
-  if (entry == cache.end())
-    entry = cache.emplace(filename, ProbeTrajectory(filename)).first;
-  return entry->second;
-}
-
 struct ProbeGeometry
 {
   MBDisjointBoxLayout layout;
@@ -1581,23 +1541,41 @@ void Probe(const MBLevelBoxData<double, NUMCOMPS, HOST> &a_JU,
           bool give_space = false,
           string probe_file = "default",
           string Probe_data_file = "default",
-          const MBLevelBoxData<double, 1, HOST>* a_dVolrLev = nullptr)
+          const MBLevelBoxData<double, 1, HOST>* a_dVolrLev = nullptr,
+          const HelioCubed::ProbeTrajectory* a_trajectory = nullptr,
+          HelioCubed::ProbeRow* a_sample = nullptr,
+          bool* a_found = nullptr)
 
 {
   PR_TIME("Probe");
+  if (!a_trajectory && HelioCubed::packedProbeFile(probe_file))
+  {
+    auto& set = HelioCubed::packedProbeSet(probe_file);
+    set.begin();
+    for (size_t p = 0; p < set.size(); ++p)
+    {
+      HelioCubed::ProbeRow row{};
+      bool found = false;
+      Probe(a_JU,a_map,a_eulerOp,a_iop,a_iter,a_time,a_dx,false,probe_file,
+            Probe_data_file,a_dVolrLev,&set.trajectory(p),&row,&found);
+      if (found) set.record(p,row);
+    }
+    set.finish(Probe_data_file,getPhysTime(a_time));
+    return;
+  }
   int pid = procID();
   ofstream outputFile;
   auto openOutput = [&]()
   {
     if (!outputFile.is_open()) outputFile.open(Probe_data_file, std::ios::app);
   };
-  if (pid == 0 && give_space)
+  if (!a_sample && pid == 0 && give_space)
   {
     openOutput();
     outputFile << endl;
   }
   double gamma = ParseInputs::get_gamma();
-  const auto& trajectory = HelioCubed::probeTrajectory(probe_file);
+  const auto& trajectory = a_trajectory ? *a_trajectory : HelioCubed::probeTrajectory(probe_file);
   double physical_time = getPhysTime(a_time);
   double r_now = interpolate(trajectory.time, trajectory.radius, physical_time, false);
   double latitude_now = interpolate(trajectory.time, trajectory.latitude, physical_time, false);
@@ -1605,11 +1583,7 @@ void Probe(const MBLevelBoxData<double, NUMCOMPS, HOST> &a_JU,
   r_now *= c_AU;
   latitude_now = (90.0 - latitude_now);   // To co-latitude
   longitude_now = longitude_now + 181.02; // HGI to Carrington
-  if (longitude_now >= 360.0)
-    longitude_now -= 360;
-  // longitude_now = longitude_now - 1.792951949248379e+02; // HGI to Carrington
-  if (longitude_now < 0.0)
-    longitude_now += 360;
+  longitude_now = std::fmod(std::fmod(longitude_now,360.0)+360.0,360.0);
 
   double x_n = sin(latitude_now * M_PI / 180) * cos(longitude_now * M_PI / 180);
   double y_n = sin(latitude_now * M_PI / 180) * sin(longitude_now * M_PI / 180);
@@ -1741,7 +1715,13 @@ void Probe(const MBLevelBoxData<double, NUMCOMPS, HOST> &a_JU,
       const auto velocity = HelioCubed::projectProbeVectorToRTN(Vx, Vy, Vz, theta, phi);
       const auto magnetic = HelioCubed::projectProbeVectorToRTN(Bx, By, Bz, theta, phi);
 
-      // if (probed_values[0] != 0) {
+      if (a_sample)
+      {
+        *a_sample = {r_now/c_AU,90-latitude_now,longitude_now,rho,
+                     velocity[0],velocity[1],velocity[2],p,magnetic[0],magnetic[1],magnetic[2]};
+        *a_found = true;
+        return;
+      }
       openOutput();
       outputFile << setw(16) << setprecision(12) << physical_time
                  << setw(11) << setprecision(4) << r_now / c_AU

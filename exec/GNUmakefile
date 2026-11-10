@@ -122,6 +122,8 @@ $(TARGET): $(OBJ)
 # Check before compiling/linking, while keeping clean and print-* usable
 # without installed dependencies. OLCF_HDF5_ROOT remains an alternative.
 $(OBJ) $(TARGET): | check-config
+# Copying a configuration must rebuild objects and update embedded library paths.
+$(OBJ) $(TARGET): GNUmakefile $(wildcard $(CONFIG))
 
 .PHONY: check-config
 check-config:
